@@ -9,8 +9,9 @@ export default {
 
         try {
             const update = await request.json();
-            if (update.message && update.message.text) {
-                await handleCommand(update.message, env);
+            const msg = update.message || update.edited_message;
+            if (msg && msg.text) {
+                await handleCommand(msg, env);
             }
             return new Response('OK', { status: 200 });
         } catch (e) {
@@ -29,8 +30,9 @@ async function processActiveTorrents(env) {
     if (!list || list.keys.length === 0) return;
 
     for (const key of list.keys) {
-        const infoHash = key.name;
-        const dataStr = await env.TORRENTS_KV.get(infoHash);
+        const fullKey = key.name;
+        const infoHash = fullKey.includes(':') ? fullKey.split(':')[1] : fullKey;
+        const dataStr = await env.TORRENTS_KV.get(fullKey);
         if (!dataStr) continue;
 
         let torrentData;
@@ -56,10 +58,20 @@ async function processActiveTorrents(env) {
         // Check if it's time to announce
         if (now < torrentData.nextAnnounceTime) continue;
 
-        // Convert info hash hex to bytes
+        // Convert info hash hex to bytes, bail on invalid/corrupted data
         const infoHashBytes = new Uint8Array(20);
+        let invalidInfoHash = false;
         for (let i = 0; i < 20; i++) {
-            infoHashBytes[i] = parseInt(infoHash.substring(i * 2, i * 2 + 2), 16);
+            const byte = parseInt(infoHash.substring(i * 2, i * 2 + 2), 16);
+            if (Number.isNaN(byte)) {
+                invalidInfoHash = true;
+                break;
+            }
+            infoHashBytes[i] = byte;
+        }
+        if (invalidInfoHash) {
+            console.error(`Invalid infoHash for ${fullKey}, skipping.`);
+            continue;
         }
 
         try {
@@ -108,7 +120,7 @@ async function processActiveTorrents(env) {
 
                  // If the event was 'stopped', we are done and can remove it from KV
                  if (torrentData.event === 'stopped') {
-                     await env.TORRENTS_KV.delete(infoHash);
+                     await env.TORRENTS_KV.delete(fullKey);
                      continue;
                  }
 
@@ -118,18 +130,18 @@ async function processActiveTorrents(env) {
                  }
 
                  torrentData.nextAnnounceTime = now + (torrentData.intervalSecs * 1000);
-                 await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+                 await env.TORRENTS_KV.put(fullKey, JSON.stringify(torrentData));
             } else {
                 console.error(`Tracker error for ${infoHash}: ${response.statusText}`);
                 // Try again in 1 minute on HTTP error
                 torrentData.nextAnnounceTime = now + 60000;
-                await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+                await env.TORRENTS_KV.put(fullKey, JSON.stringify(torrentData));
             }
         } catch (e) {
             console.error(`Fetch error for ${infoHash}: `, e);
             // Try again in 1 minute on network error
             torrentData.nextAnnounceTime = now + 60000;
-            await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+            await env.TORRENTS_KV.put(fullKey, JSON.stringify(torrentData));
         }
     }
 }
@@ -203,7 +215,8 @@ async function handleCommand(message, env) {
         }
 
         // Check if already seeding
-        const existing = await env.TORRENTS_KV.get(infoHash);
+        const storageKey = `${chatId}:${infoHash}`;
+        const existing = await env.TORRENTS_KV.get(storageKey);
         if (existing) {
             await sendMessage(chatId, "⚠️ That torrent is already being seeded.", env, null);
             return;
@@ -223,7 +236,7 @@ async function handleCommand(message, env) {
             event: 'started'
         };
 
-        await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+        await env.TORRENTS_KV.put(storageKey, JSON.stringify(torrentData));
         await sendMessage(chatId, `🚀 Started seeding!\nHash: \`${infoHash}\`\nSpeed: ${speedKbps} KB/s`, env);
 
         // Let the scheduled task handle the initial announce
@@ -231,7 +244,7 @@ async function handleCommand(message, env) {
     }
 
     if (command === '/status') {
-        const list = await env.TORRENTS_KV.list();
+        const list = await env.TORRENTS_KV.list({ prefix: `${chatId}:` });
         if (list.keys.length === 0) {
             await sendMessage(chatId, "💤 No active torrents.", env, null);
             return;
@@ -246,7 +259,8 @@ async function handleCommand(message, env) {
                 const data = JSON.parse(dataStr);
                 const uploadedGb = data.uploaded / (1024 ** 3);
                 totalUploaded += uploadedGb;
-                responseLines.push(`• \`${key.name.substring(0, 8)}...\` | ${uploadedGb.toFixed(2)} GB`);
+                const infoHash = key.name.includes(':') ? key.name.split(':')[1] : key.name;
+                responseLines.push(`• \`${infoHash.substring(0, 8)}...\` | ${uploadedGb.toFixed(2)} GB`);
             }
         }
 
@@ -262,7 +276,8 @@ async function handleCommand(message, env) {
         }
 
         const infoHash = args[1].toLowerCase();
-        const dataStr = await env.TORRENTS_KV.get(infoHash);
+        const storageKey = `${chatId}:${infoHash}`;
+        const dataStr = await env.TORRENTS_KV.get(storageKey);
 
         if (!dataStr) {
             await sendMessage(chatId, "❌ Torrent not found in active list.", env, null);
@@ -273,17 +288,17 @@ async function handleCommand(message, env) {
             const torrentData = JSON.parse(dataStr);
             torrentData.event = 'stopped';
             torrentData.nextAnnounceTime = 0;
-            await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+            await env.TORRENTS_KV.put(storageKey, JSON.stringify(torrentData));
             await sendMessage(chatId, `⏳ Cancelling \`${infoHash.substring(0, 8)}...\``, env);
         } catch(e) {
-            await env.TORRENTS_KV.delete(infoHash);
+            await env.TORRENTS_KV.delete(storageKey);
             await sendMessage(chatId, `❌ Failed to parse torrent data. Removed \`${infoHash.substring(0, 8)}...\``, env);
         }
         return;
     }
 
     if (command === '/cancel_all') {
-        const list = await env.TORRENTS_KV.list();
+        const list = await env.TORRENTS_KV.list({ prefix: `${chatId}:` });
         if (list.keys.length === 0) {
             await sendMessage(chatId, "💤 Nothing to cancel.", env, null);
             return;
