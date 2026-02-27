@@ -10,7 +10,7 @@ export default {
         try {
             const update = await request.json();
             const msg = update.message || update.edited_message;
-            if (msg && msg.text) {
+            if (msg && (msg.text || msg.caption || msg.document)) {
                 await handleCommand(msg, env);
             }
             return new Response('OK', { status: 200 });
@@ -52,7 +52,7 @@ async function processActiveTorrents(env) {
             const uploadedBytes = uploadSpeedBps * elapsedSecs;
             torrentData.uploaded += Math.floor(uploadedBytes);
             torrentData.lastUpdate = now;
-            await env.TORRENTS_KV.put(infoHash, JSON.stringify(torrentData));
+            await env.TORRENTS_KV.put(fullKey, JSON.stringify(torrentData));
         }
 
         // Check if it's time to announce
@@ -92,7 +92,8 @@ async function processActiveTorrents(env) {
                 .map(([k, v]) => `${k}=${k === 'info_hash' ? v : encodeURIComponent(v)}`)
                 .join('&');
 
-            const url = `${env.TRACKER_ANNOUNCE_URL}?${queryString}`;
+            const announceUrl = torrentData.announceUrl || env.TRACKER_ANNOUNCE_URL;
+            const url = `${announceUrl}?${queryString}`;
 
             const response = await fetch(url, {
                 headers: {
@@ -178,15 +179,17 @@ async function sendMessage(chatId, text, env, parseMode = 'Markdown') {
 }
 
 async function handleCommand(message, env) {
-    const text = message.text;
+    const text = message.text || message.caption || '';
     const chatId = message.chat.id;
-    const args = text.split(' ');
-    const command = args[0].toLowerCase();
+    const args = text.split(' ').filter(Boolean);
+    const command = args.length > 0 ? args[0].toLowerCase() : '';
 
     if (command === '/start' || command === '/help') {
         const helpText =
             "🤖 *Multi-Torrent Spoofer*\n\n" +
-            "`/seed <info_hash> <kbps>` - Start a torrent\n" +
+            "`/seed <info_hash> <kbps> [announce_url]` - Start a torrent\n" +
+            "`/seed <magnet_link> <kbps>` - Start via magnet link\n" +
+            "Send a `.torrent` file with caption `/seed <kbps>` - Start via torrent file\n" +
             "`/status` - View all active torrents\n" +
             "`/cancel <info_hash>` - Stop a specific torrent\n" +
             "`/cancel_all` - Stop everything\n";
@@ -195,26 +198,100 @@ async function handleCommand(message, env) {
     }
 
     if (command === '/seed') {
-        if (args.length !== 3) {
-            await sendMessage(chatId, "❌ Format: `/seed <info_hash> <upload_speed_kbps>`", env);
+        let infoHash = '';
+        let announceUrl = '';
+        let speedKbps = 0;
+
+        try {
+            if (message.document && message.document.file_name.endsWith('.torrent')) {
+                if (args.length < 2) {
+                    await sendMessage(chatId, "❌ Format for torrent file: Caption with `/seed <speed_kbps>`", env);
+                    return;
+                }
+                speedKbps = parseInt(args[1]);
+
+                const fileId = message.document.file_id;
+                const fileRes = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${fileId}`);
+                const fileJson = await fileRes.json();
+                if (!fileJson.ok) throw new Error('Could not get file path');
+
+                const filePath = fileJson.result.file_path;
+                const downloadRes = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${filePath}`);
+                const fileBuffer = await downloadRes.arrayBuffer();
+
+                const decoded = bencode.decode(Buffer.from(fileBuffer));
+
+                if (decoded.announce) {
+                    announceUrl = Buffer.from(decoded.announce).toString('utf-8');
+                } else if (decoded['announce-list']) {
+                    announceUrl = Buffer.from(decoded['announce-list'][0][0]).toString('utf-8');
+                }
+
+                const infoEncoded = bencode.encode(decoded.info);
+                const hashBuffer = await crypto.subtle.digest('SHA-1', infoEncoded);
+                infoHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+            } else if (args.length >= 3 && args[1].startsWith('magnet:')) {
+                const magnetUrl = new URL(args[1]);
+                const xt = magnetUrl.searchParams.get('xt');
+                if (!xt) throw new Error('Invalid magnet link: Missing xt parameter');
+
+                if (xt.startsWith('urn:btih:')) {
+                    const hashPart = xt.substring(9);
+                    if (hashPart.length === 40) {
+                        infoHash = hashPart.toLowerCase();
+                    } else if (hashPart.length === 32) {
+                        // Base32 decoding
+                        const base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+                        let bits = "";
+                        let hex = "";
+                        for (let i = 0; i < hashPart.length; i++) {
+                            const val = base32chars.indexOf(hashPart.charAt(i).toUpperCase());
+                            bits += val.toString(2).padStart(5, '0');
+                        }
+                        for (let i = 0; i < bits.length; i += 4) {
+                            hex += parseInt(bits.substring(i, i + 4), 2).toString(16);
+                        }
+                        infoHash = hex.toLowerCase();
+                    } else {
+                        throw new Error('Invalid magnet link: Unknown info hash length');
+                    }
+                } else {
+                    throw new Error('Invalid magnet link: Unsupported xt format');
+                }
+
+                const tr = magnetUrl.searchParams.get('tr');
+                if (tr) announceUrl = tr;
+
+                speedKbps = parseInt(args[2]);
+
+            } else {
+                if (args.length < 3) {
+                    await sendMessage(chatId, "❌ Format: `/seed <info_hash|magnet_link> <kbps> [announce_url]`", env);
+                    return;
+                }
+                infoHash = args[1].toLowerCase();
+                speedKbps = parseInt(args[2]);
+                if (args.length >= 4) {
+                    announceUrl = args[3];
+                }
+            }
+        } catch (e) {
+            console.error('Seed command error:', e);
+            await sendMessage(chatId, `❌ Error processing request: ${e.message}`, env);
             return;
         }
 
-        const infoHash = args[1].toLowerCase();
-
-        // Basic infohash validation (must be 40 hex chars)
         if (!/^[0-9a-f]{40}$/.test(infoHash)) {
             await sendMessage(chatId, `❌ Invalid Info Hash: \`${infoHash}\``, env);
             return;
         }
 
-        const speedKbps = parseInt(args[2]);
         if (isNaN(speedKbps) || speedKbps <= 0) {
             await sendMessage(chatId, "❌ Speed must be a positive number.", env);
             return;
         }
 
-        // Check if already seeding
         const storageKey = `${chatId}:${infoHash}`;
         const existing = await env.TORRENTS_KV.get(storageKey);
         if (existing) {
@@ -236,10 +313,13 @@ async function handleCommand(message, env) {
             event: 'started'
         };
 
-        await env.TORRENTS_KV.put(storageKey, JSON.stringify(torrentData));
-        await sendMessage(chatId, `🚀 Started seeding!\nHash: \`${infoHash}\`\nSpeed: ${speedKbps} KB/s`, env);
+        if (announceUrl) {
+            torrentData.announceUrl = announceUrl;
+        }
 
-        // Let the scheduled task handle the initial announce
+        await env.TORRENTS_KV.put(storageKey, JSON.stringify(torrentData));
+        await sendMessage(chatId, `🚀 Started seeding!\nHash: \`${infoHash}\`\nSpeed: ${speedKbps} KB/s${announceUrl ? '\nTracker: `'+announceUrl+'`' : ''}`, env);
+
         return;
     }
 
