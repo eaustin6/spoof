@@ -83,10 +83,23 @@ https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 
 You should see a JSON response like `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
+### 6. Automated Deployment via GitHub Actions
+
+You can automatically deploy your bot to Cloudflare Workers on every push to the `main` branch.
+
+1. Go to your GitHub repository **Settings** -> **Secrets and variables** -> **Actions**.
+2. Add the following repository secrets:
+   - `CLOUDFLARE_API_TOKEN`: Create an API token in your Cloudflare dashboard with "Edit Cloudflare Workers" permissions.
+   - `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID (found on the right sidebar of the Workers dashboard).
+
+When you push changes, the `.github/workflows/deploy.yml` workflow will automatically run and deploy the worker.
+
 ## Usage Commands
 
 Start interacting with your bot on Telegram:
-- `/seed <info_hash> <kbps>` - Start a spoofed torrent
+- `/seed <info_hash> <kbps> [announce_url]` - Start a spoofed torrent manually
+- `/seed <magnet_link> <kbps>` - Start a torrent using a magnet link (automatically extracts info hash and tracker URL)
+- Send a `.torrent` file and put `/seed <kbps>` in the caption to start seeding from a torrent file.
 - `/status` - View all your active torrents
 - `/cancel <info_hash>` - Stop a specific torrent
 - `/cancel_all` - Stop all your active torrents
