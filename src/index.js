@@ -203,7 +203,7 @@ async function handleCommand(message, env) {
         let speedKbps = 0;
 
         try {
-            if (message.document && message.document.file_name.endsWith('.torrent')) {
+            if (message.document?.file_name && message.document.file_name.endsWith('.torrent')) {
                 if (args.length < 2) {
                     await sendMessage(chatId, "❌ Format for torrent file: Caption with `/seed <speed_kbps>`", env);
                     return;

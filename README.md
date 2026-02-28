@@ -85,12 +85,16 @@ You should see a JSON response like `{"ok":true,"result":true,"description":"Web
 
 ### 6. Automated Deployment via GitHub Actions
 
-You can automatically deploy your bot to Cloudflare Workers on every push to the `main` branch.
+You can automatically deploy your bot to Cloudflare Workers on every push to the `main` branch. The deployment workflow securely passes environmental variables (secrets) to Cloudflare.
 
 1. Go to your GitHub repository **Settings** -> **Secrets and variables** -> **Actions**.
-2. Add the following repository secrets:
+2. Add the following repository secrets to allow GitHub Actions to authenticate with Cloudflare and configure your bot:
    - `CLOUDFLARE_API_TOKEN`: Create an API token in your Cloudflare dashboard with "Edit Cloudflare Workers" permissions.
    - `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID (found on the right sidebar of the Workers dashboard).
+   - `BOT_TOKEN`: The token you received from BotFather.
+   - `TRACKER_ANNOUNCE_URL`: Your mock/spoofed BitTorrent tracker announce URL.
+
+The action securely maps `BOT_TOKEN` and `TRACKER_ANNOUNCE_URL` environmental variables to Cloudflare Workers Secrets during deployment using Wrangler.
 
 When you push changes, the `.github/workflows/deploy.yml` workflow will automatically run and deploy the worker.
 
