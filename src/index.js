@@ -82,11 +82,18 @@ async function processActiveTorrents(env) {
             params.append('uploaded', torrentData.uploaded.toString());
             params.append('downloaded', '0');
             params.append('left', '0');
-            params.append('compact', '1');
-
+            params.append('corrupt', '0');
+            if (torrentData.key) {
+                params.append('key', torrentData.key);
+            }
             if (torrentData.event) {
                 params.append('event', torrentData.event);
             }
+            params.append('numwant', '200');
+            params.append('compact', '1');
+            params.append('no_peer_id', '1');
+            params.append('supportcrypto', '1');
+            params.append('redundant', '0');
 
             const queryString = Array.from(params.entries())
                 .map(([k, v]) => `${k}=${k === 'info_hash' ? v : encodeURIComponent(v)}`)
@@ -102,7 +109,8 @@ async function processActiveTorrents(env) {
             const response = await fetch(url, {
                 headers: {
                     'User-Agent': 'qBittorrent/5.1.4',
-                    'Accept-Encoding': 'gzip, deflate'
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'close'
                 }
             });
 
@@ -191,11 +199,16 @@ async function handleCommand(message, env) {
     if (command === '/start' || command === '/help') {
         const helpText =
             "🤖 *Multi-Torrent Spoofer*\n\n" +
-            "`/seed <magnet_link> <kbps>` - Start via magnet link\n" +
-            "Send a `.torrent` file with caption `/seed <kbps>` - Start via torrent file\n" +
-            "`/status` - View all active torrents\n" +
-            "`/cancel <info_hash>` - Stop a specific torrent\n" +
-            "`/cancel_all` - Stop everything\n";
+            "📖 *Usage Guide:*\n" +
+            "1️⃣ *Start Seeding (Magnet):* Send `/seed <magnet_link> <kbps>` (e.g. `/seed magnet:?xt=... 5000` to spoof 5MB/s).\n" +
+            "2️⃣ *Start Seeding (File):* Send a `.torrent` file with the caption `/seed <kbps>`.\n" +
+            "3️⃣ *Check Status:* Send `/status` to view your active torrents and total fake uploaded data.\n" +
+            "4️⃣ *Stop Seeding:* Send `/cancel <info_hash>` to stop a specific torrent or `/cancel_all` to stop everything.\n\n" +
+            "⚠️ *Disclaimer & Risks:*\n" +
+            "• *Tracker Bans:* This bot mimics a BitTorrent client (qBittorrent), but abnormally high speeds or lack of download progress might trigger tracker anti-cheat systems, leading to a ban.\n" +
+            "• *IP Leaks:* The IP address announced to the tracker will be the Cloudflare Worker's IP, not yours. This hides your home IP but may look suspicious to private trackers enforcing IP rules.\n" +
+            "• *Inaccurate Stats:* The spoofed upload amount is an estimate based on speed and time. It may not exactly match what the tracker records.\n" +
+            "• *Use at your own risk!* We are not responsible for any banned accounts or lost ratios.";
         await sendMessage(chatId, helpText, env);
         return;
     }
@@ -305,6 +318,13 @@ async function handleCommand(message, env) {
 
         const peerId = generatePeerId();
 
+        // Generate random 8-character hex key to mimic qBittorrent client
+        const hexChars = '0123456789ABCDEF';
+        let trackerKey = '';
+        for (let i = 0; i < 8; i++) {
+            trackerKey += hexChars[Math.floor(Math.random() * 16)];
+        }
+
         const torrentData = {
             chatId: chatId,
             uploadSpeedKbps: speedKbps,
@@ -312,6 +332,7 @@ async function handleCommand(message, env) {
             startTime: Date.now(),
             lastUpdate: Date.now(),
             peerId: peerId,
+            key: trackerKey,
             intervalSecs: 0,
             nextAnnounceTime: 0,
             event: 'started'
