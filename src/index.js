@@ -92,7 +92,11 @@ async function processActiveTorrents(env) {
                 .map(([k, v]) => `${k}=${k === 'info_hash' ? v : encodeURIComponent(v)}`)
                 .join('&');
 
-            const announceUrl = torrentData.announceUrl || env.TRACKER_ANNOUNCE_URL;
+            const announceUrl = torrentData.announceUrl;
+            if (!announceUrl) {
+                console.error(`No announceUrl for ${infoHash}, skipping.`);
+                continue;
+            }
             const url = `${announceUrl}?${queryString}`;
 
             const response = await fetch(url, {
@@ -187,7 +191,6 @@ async function handleCommand(message, env) {
     if (command === '/start' || command === '/help') {
         const helpText =
             "🤖 *Multi-Torrent Spoofer*\n\n" +
-            "`/seed <info_hash> <kbps> [announce_url]` - Start a torrent\n" +
             "`/seed <magnet_link> <kbps>` - Start via magnet link\n" +
             "Send a `.torrent` file with caption `/seed <kbps>` - Start via torrent file\n" +
             "`/status` - View all active torrents\n" +
@@ -227,6 +230,10 @@ async function handleCommand(message, env) {
                     announceUrl = Buffer.from(decoded['announce-list'][0][0]).toString('utf-8');
                 }
 
+                if (!announceUrl) {
+                    throw new Error("Could not find tracker URL in torrent file.");
+                }
+
                 const infoEncoded = bencode.encode(decoded.info);
                 const hashBuffer = await crypto.subtle.digest('SHA-1', infoEncoded);
                 infoHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -263,18 +270,15 @@ async function handleCommand(message, env) {
                 const tr = magnetUrl.searchParams.get('tr');
                 if (tr) announceUrl = tr;
 
+                if (!announceUrl) {
+                    throw new Error("Could not find tracker URL in magnet link.");
+                }
+
                 speedKbps = parseInt(args[2]);
 
             } else {
-                if (args.length < 3) {
-                    await sendMessage(chatId, "❌ Format: `/seed <info_hash|magnet_link> <kbps> [announce_url]`", env);
-                    return;
-                }
-                infoHash = args[1].toLowerCase();
-                speedKbps = parseInt(args[2]);
-                if (args.length >= 4) {
-                    announceUrl = args[3];
-                }
+                await sendMessage(chatId, "❌ Please provide a magnet link or upload a `.torrent` file.", env);
+                return;
             }
         } catch (e) {
             console.error('Seed command error:', e);

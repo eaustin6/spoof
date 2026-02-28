@@ -50,19 +50,13 @@ id = "<YOUR_NEW_KV_ID>"
 
 ### 3. Add Secrets
 
-The bot needs your Telegram Bot Token and the Tracker Announce URL to operate. Because these are sensitive, we'll store them as Cloudflare Secrets.
+The bot needs your Telegram Bot Token to operate. Because this is sensitive, we'll store it as a Cloudflare Secret.
 
 Add the Telegram Bot Token:
 ```bash
 npx wrangler secret put BOT_TOKEN
 ```
 *(Paste your token when prompted)*
-
-Add your Tracker Announce URL:
-```bash
-npx wrangler secret put TRACKER_ANNOUNCE_URL
-```
-*(Paste your Tracker Announce URL when prompted, e.g., `http://tracker.example.com/announce`)*
 
 ### 4. Deploy the Worker
 
@@ -92,16 +86,14 @@ You can automatically deploy your bot to Cloudflare Workers on every push to the
    - `CLOUDFLARE_API_TOKEN`: Create an API token in your Cloudflare dashboard with "Edit Cloudflare Workers" permissions.
    - `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID (found on the right sidebar of the Workers dashboard).
    - `BOT_TOKEN`: The token you received from BotFather.
-   - `TRACKER_ANNOUNCE_URL`: Your mock/spoofed BitTorrent tracker announce URL.
 
-The action securely maps `BOT_TOKEN` and `TRACKER_ANNOUNCE_URL` environmental variables to Cloudflare Workers Secrets during deployment using Wrangler.
+The action securely maps `BOT_TOKEN` environmental variables to Cloudflare Workers Secrets during deployment using Wrangler.
 
 When you push changes, the `.github/workflows/deploy.yml` workflow will automatically run and deploy the worker.
 
 ## Usage Commands
 
 Start interacting with your bot on Telegram:
-- `/seed <info_hash> <kbps> [announce_url]` - Start a spoofed torrent manually
 - `/seed <magnet_link> <kbps>` - Start a torrent using a magnet link (automatically extracts info hash and tracker URL)
 - Send a `.torrent` file and put `/seed <kbps>` in the caption to start seeding from a torrent file.
 - `/status` - View all your active torrents
